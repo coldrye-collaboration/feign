@@ -47,8 +47,8 @@ public final class RequestTemplate implements Serializable {
   private HttpMethod method;
   private transient Charset charset = Util.UTF_8;
   private Request.Body body = Request.Body.empty();
-  private boolean decodeSlash = true;
-  private CollectionFormat collectionFormat = CollectionFormat.EXPLODED;
+  private Boolean decodeSlash = null;
+  private CollectionFormat collectionFormat = null;
   private MethodMetadata methodMetadata;
   private Target<?> feignTarget;
 
@@ -81,7 +81,7 @@ public final class RequestTemplate implements Serializable {
       HttpMethod method,
       Charset charset,
       Request.Body body,
-      boolean decodeSlash,
+      Boolean decodeSlash,
       CollectionFormat collectionFormat,
       MethodMetadata methodMetadata,
       Target<?> feignTarget) {
@@ -93,8 +93,7 @@ public final class RequestTemplate implements Serializable {
     this.charset = charset;
     this.body = body;
     this.decodeSlash = decodeSlash;
-    this.collectionFormat =
-        (collectionFormat != null) ? collectionFormat : CollectionFormat.EXPLODED;
+    this.collectionFormat = collectionFormat;
     this.methodMetadata = methodMetadata;
     this.feignTarget = feignTarget;
   }
@@ -147,8 +146,7 @@ public final class RequestTemplate implements Serializable {
     this.charset = toCopy.charset;
     this.body = toCopy.body;
     this.decodeSlash = toCopy.decodeSlash;
-    this.collectionFormat =
-        (toCopy.collectionFormat != null) ? toCopy.collectionFormat : CollectionFormat.EXPLODED;
+    this.collectionFormat = toCopy.collectionFormat;
     this.uriTemplate = toCopy.uriTemplate;
     this.bodyTemplate = toCopy.bodyTemplate;
     this.resolved = false;
@@ -173,7 +171,7 @@ public final class RequestTemplate implements Serializable {
 
     if (this.uriTemplate == null) {
       /* create a new uri template using the default root */
-      this.uriTemplate = UriTemplate.create("", !this.decodeSlash, this.charset);
+      this.uriTemplate = UriTemplate.create("", !this.decodeSlash(), this.charset);
     }
 
     String expanded = this.uriTemplate.expand(variables);
@@ -322,18 +320,19 @@ public final class RequestTemplate implements Serializable {
   /**
    * Set whether do encode slash {@literal /} characters when resolving this template.
    *
-   * @param decodeSlash if slash literals should not be encoded.
+   * @param decodeSlash if slash literals should not be encoded or null.
    * @return a RequestTemplate for chaining.
    */
-  public RequestTemplate decodeSlash(boolean decodeSlash) {
+  public RequestTemplate decodeSlash(Boolean decodeSlash) {
     this.decodeSlash = decodeSlash;
     this.uriTemplate =
-        UriTemplate.create(this.uriTemplate.toString(), !this.decodeSlash, this.charset);
+        UriTemplate.create(this.uriTemplate.toString(), !decodeSlash(), this.charset);
     if (!this.queries.isEmpty()) {
       this.queries.replaceAll((key, queryTemplate) -> QueryTemplate.create(
           /* replace the current template with new ones honoring the decode value */
-          queryTemplate.getName(), queryTemplate.getValues(), charset, collectionFormat,
-          decodeSlash));
+          // TODO report bug?: must use charset and collection format from query template
+          queryTemplate.getName(), queryTemplate.getValues(), charset, collectionFormat(),
+          decodeSlash()));
 
     }
     return this;
@@ -345,7 +344,7 @@ public final class RequestTemplate implements Serializable {
    * @return true if slash literals are not encoded, false otherwise.
    */
   public boolean decodeSlash() {
-    return decodeSlash;
+    return Optional.ofNullable(decodeSlash).orElse(Boolean.TRUE);
   }
 
   /**
@@ -368,7 +367,7 @@ public final class RequestTemplate implements Serializable {
    */
   @SuppressWarnings("unused")
   public CollectionFormat collectionFormat() {
-    return collectionFormat;
+    return Optional.ofNullable(collectionFormat).orElse(CollectionFormat.EXPLODED);
   }
 
   /**
@@ -471,7 +470,7 @@ public final class RequestTemplate implements Serializable {
     if (append && this.uriTemplate != null) {
       this.uriTemplate = UriTemplate.append(this.uriTemplate, uri);
     } else {
-      this.uriTemplate = UriTemplate.create(uri, !this.decodeSlash, this.charset);
+      this.uriTemplate = UriTemplate.create(uri, !this.decodeSlash(), this.charset);
     }
     return this;
   }
@@ -607,7 +606,7 @@ public final class RequestTemplate implements Serializable {
    * @return a RequestTemplate for chaining.
    */
   public RequestTemplate query(String name, Iterable<String> values) {
-    return appendQuery(name, values, this.collectionFormat);
+    return appendQuery(name, values, collectionFormat());
   }
 
   /**
@@ -645,9 +644,9 @@ public final class RequestTemplate implements Serializable {
     /* create a new query template out of the information here */
     this.queries.compute(name, (key, queryTemplate) -> {
       if (queryTemplate == null) {
-        return QueryTemplate.create(name, values, this.charset, collectionFormat, this.decodeSlash);
+        return QueryTemplate.create(name, values, this.charset, collectionFormat, decodeSlash());
       } else {
-        return QueryTemplate.append(queryTemplate, values, collectionFormat, this.decodeSlash);
+        return QueryTemplate.append(queryTemplate, values, collectionFormat, decodeSlash());
       }
     });
     return this;
@@ -1064,4 +1063,44 @@ public final class RequestTemplate implements Serializable {
     RequestTemplate create(Object[] argv);
   }
 
+  /**
+   * Merges request templates from inherited methods and overriding methods.
+   *
+   * To be used during contract parsing and validation only.
+   *
+   * @param mergedMethodMetadata The merged method meta data
+   * @param inherited The inherited request template
+   * @param override The overriding request template
+   * @return The merged request template
+   *
+   * @see feign.MethodMetadata#merge(MethodMetadata, MethodMetadata)
+   * @see feign.Contract#parseAndValidateMetadata(Class)
+   */
+  public static RequestTemplate merge(MethodMetadata mergedMethodMetadata, RequestTemplate inherited, RequestTemplate override) {
+    RequestTemplate result = new RequestTemplate();
+
+    /*
+     * Note: resolved, body, charset are populated once the request template is used in a live request to a service, so
+     * we will not merge these here
+     */
+    result.methodMetadata = mergedMethodMetadata;
+    result.target = Optional.ofNullable(override.target).orElse(inherited.target);
+    result.fragment = Optional.ofNullable(override.fragment).orElse(inherited.fragment);
+    result.uriTemplate = Optional.ofNullable(override.uriTemplate).orElse(inherited.uriTemplate);
+    result.method = Optional.ofNullable(override.method).orElse(inherited.method);
+    result.feignTarget = Optional.<Target<?>>ofNullable(override.feignTarget).orElse(inherited.feignTarget);
+    result.bodyTemplate = Optional.ofNullable(override.bodyTemplate).orElse(inherited.bodyTemplate);
+    if (!override.headers.isEmpty()) {
+      result.headers.putAll(override.headers);
+    } else {
+      result.headers.putAll(inherited.headers);
+    }
+    result.queries.putAll(inherited.queries);
+    result.queries.putAll(override.queries);
+    result.collectionFormat = Optional.ofNullable(override.collectionFormat).orElse(inherited.collectionFormat);
+    // Note: this must come after the queries have been merged, otherwise the queries will not be updated correctly
+    result.decodeSlash(Optional.ofNullable(override.decodeSlash).orElse(inherited.decodeSlash));
+
+    return result;
+  }
 }

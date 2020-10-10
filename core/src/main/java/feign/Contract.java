@@ -45,61 +45,86 @@ public interface Contract {
     public List<MethodMetadata> parseAndValidateMetadata(Class<?> targetType) {
       checkState(targetType.getTypeParameters().length == 0, "Parameterized types unsupported: %s",
           targetType.getSimpleName());
-      checkState(targetType.getInterfaces().length <= 1, "Only single inheritance supported: %s",
-          targetType.getSimpleName());
-      if (targetType.getInterfaces().length == 1) {
-        checkState(targetType.getInterfaces()[0].getInterfaces().length == 0,
-            "Only single-level inheritance supported: %s",
-            targetType.getSimpleName());
-      }
       final Map<String, MethodMetadata> result = new LinkedHashMap<String, MethodMetadata>();
-      for (final Method method : targetType.getMethods()) {
-        if (method.getDeclaringClass() == Object.class ||
-            (method.getModifiers() & Modifier.STATIC) != 0 ||
-            Util.isDefault(method)) {
-          continue;
-        }
-        final MethodMetadata metadata = parseAndValidateMetadata(targetType, method);
-        checkState(!result.containsKey(metadata.configKey()), "Overrides unsupported: %s",
-            metadata.configKey());
-        result.put(metadata.configKey(), metadata);
-      }
+      parseAndValidateAndMergeMetadata(result, targetType, targetType);
       return new ArrayList<>(result.values());
     }
 
+    private void parseAndValidateAndMergeMetadata(Map<String, MethodMetadata> data, Class<?> targetType, Class<?> inheritedType) {
+
+      // collect method meta data from super types first (depth first)
+      for (final Class<?> superType : inheritedType.getInterfaces()) {
+        parseAndValidateAndMergeMetadata(data, targetType, superType);
+      }
+
+      for (final Method method : inheritedType.getMethods()) {
+        if (method.getDeclaringClass() == Object.class ||
+                (method.getModifiers() & Modifier.STATIC) != 0 ||
+                Util.isDefault(method)) {
+          continue;
+        }
+
+        final MethodMetadata metadata = parseAndValidateMetadata(targetType, method);
+
+        processAnnotationsRecursivelyOnClass(metadata, inheritedType);
+
+        parseAndValidateMethodMetadata(metadata, targetType, method);
+
+        // TODO check if template has headers... whatever
+        if (metadata.template().method() == null) {
+          // ignore method as it is not annotated with any of the supported annotations
+          continue;
+        }
+        if (data.containsKey(metadata.configKey())) {
+          final MethodMetadata mergedMetadata = MethodMetadata.merge(data.get(metadata.configKey()), metadata);
+          data.put(mergedMetadata.configKey(), mergedMetadata);
+        } else {
+          data.put(metadata.configKey(), metadata);
+        }
+      }
+    }
+
     /**
-     * @deprecated use {@link #parseAndValidateMetadata(Class, Method)} instead.
+     * @deprecated use {@link #parseAndValidateMethodMetadata(MethodMetadata, Class, Method)} instead.
      */
     @Deprecated
     public MethodMetadata parseAndValidateMetadata(Method method) {
-      return parseAndValidateMetadata(method.getDeclaringClass(), method);
+      throw new UnsupportedOperationException("deprecrated");
+      //return parseAndValidateMetadata(method.getDeclaringClass(), method);
+    }
+
+    private void processAnnotationsRecursivelyOnClass(MethodMetadata data, Class<?> inheritedType) {
+      // TODO merge metadata
+      for (Class<?> superType : inheritedType.getInterfaces()) {
+        processAnnotationOnClass(data, superType);
+      }
+      processAnnotationOnClass(data, inheritedType);
+    }
+
+    protected MethodMetadata parseAndValidateMetadata(Class<?> targetType, Method method) {
+      final MethodMetadata result = new MethodMetadata();
+      result.configKey(Feign.configKey(targetType, method))
+              .targetType(targetType)
+              .method(method)
+              .returnType(Types.resolve(targetType, targetType, method.getGenericReturnType()));
+      processAnnotationsRecursivelyOnClass(result, targetType);
+      return result;
     }
 
     /**
      * Called indirectly by {@link #parseAndValidateMetadata(Class)}.
      */
-    protected MethodMetadata parseAndValidateMetadata(Class<?> targetType, Method method) {
-      final MethodMetadata data = new MethodMetadata();
-      data.targetType(targetType);
-      data.method(method);
-      data.returnType(Types.resolve(targetType, targetType, method.getGenericReturnType()));
-      data.configKey(Feign.configKey(targetType, method));
-
-      if (targetType.getInterfaces().length == 1) {
-        processAnnotationOnClass(data, targetType.getInterfaces()[0]);
-      }
-      processAnnotationOnClass(data, targetType);
-
-
+    protected MethodMetadata parseAndValidateMethodMetadata(MethodMetadata data, Class<?> targetType, Method method) {
       for (final Annotation methodAnnotation : method.getAnnotations()) {
         processAnnotationOnMethod(data, methodAnnotation, method);
       }
       if (data.isIgnored()) {
         return data;
       }
-      checkState(data.template().method() != null,
-          "Method %s not annotated with HTTP method type (ex. GET, POST)%s",
-          data.configKey(), data.warnings());
+      // the method is not annotated by any of the supported annotations, so we will ignore it
+      if (data.template().method() == null) {
+        return data;
+      }
       final Class<?>[] parameterTypes = method.getParameterTypes();
       final Type[] genericParameterTypes = method.getGenericParameterTypes();
 

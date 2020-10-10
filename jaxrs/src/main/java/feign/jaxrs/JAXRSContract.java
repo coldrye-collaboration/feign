@@ -36,9 +36,9 @@ public class JAXRSContract extends DeclarativeContract {
   // Protected so unittest can call us
   // XXX: Should parseAndValidateMetadata(Class, Method) be public instead? The old deprecated
   // parseAndValidateMetadata(Method) was public..
-  @Override
+  // FIXME override super method
   protected MethodMetadata parseAndValidateMetadata(Class<?> targetType, Method method) {
-    return super.parseAndValidateMetadata(targetType, method);
+    return super.parseAndValidateMetadata(targetType, targetType, method);
   }
 
   public JAXRSContract() {

@@ -29,9 +29,9 @@ public final class MethodMetadata implements Serializable {
   private Integer bodyIndex;
   private Integer headerMapIndex;
   private Integer queryMapIndex;
-  private boolean queryMapEncoded;
+  private Boolean queryMapEncoded;
   private transient Type bodyType;
-  private final RequestTemplate template = new RequestTemplate();
+  private RequestTemplate template = new RequestTemplate();
   private final List<String> formParams = new ArrayList<String>();
   private final Map<Integer, Collection<String>> indexToName =
       new LinkedHashMap<Integer, Collection<String>>();
@@ -40,7 +40,7 @@ public final class MethodMetadata implements Serializable {
   private final Map<Integer, Boolean> indexToEncoded = new LinkedHashMap<Integer, Boolean>();
   private transient Map<Integer, Expander> indexToExpander;
   private BitSet parameterToIgnore = new BitSet();
-  private boolean ignored;
+  private Boolean ignored;
   private transient Class<?> targetType;
   private transient Method method;
   private transient final List<String> warnings = new ArrayList<>();
@@ -110,10 +110,10 @@ public final class MethodMetadata implements Serializable {
   }
 
   public boolean queryMapEncoded() {
-    return queryMapEncoded;
+    return Optional.ofNullable(queryMapEncoded).orElse(Boolean.FALSE);
   }
 
-  public MethodMetadata queryMapEncoded(boolean queryMapEncoded) {
+  public MethodMetadata queryMapEncoded(Boolean queryMapEncoded) {
     this.queryMapEncoded = queryMapEncoded;
     return this;
   }
@@ -217,7 +217,7 @@ public final class MethodMetadata implements Serializable {
   }
 
   public boolean isIgnored() {
-    return ignored;
+    return Optional.ofNullable(ignored).orElse(Boolean.FALSE);
   }
 
   @Experimental
@@ -251,4 +251,73 @@ public final class MethodMetadata implements Serializable {
         .collect(Collectors.joining("\n- ", "\nWarnings:\n- ", ""));
   }
 
+  /**
+   * Merges metadata from inherited methods and overriding methods.
+   *
+   * To be used during contract parsing and validation only.
+   *
+   * @param inherited The inherited method metadata
+   * @param override The overriding method metadata
+   * @return The merged method metadata
+   *
+   * @see feign.Contract#parseAndValidateMetadata(Class)
+   */
+  public static MethodMetadata merge(MethodMetadata inherited, MethodMetadata override) {
+    MethodMetadata result = new MethodMetadata();
+    /*
+      DONE private String configKey;
+      DONE private transient Type returnType;
+      DONE private Integer urlIndex;
+      DONE private Integer bodyIndex;
+      DONE private Integer headerMapIndex;
+      DONE private Integer queryMapIndex;
+      DONE private boolean queryMapEncoded;
+      DONE private transient Type bodyType;
+      DONE private RequestTemplate template = new RequestTemplate();
+      IGNORED private final List<String> formParams = new ArrayList<String>();
+      IGNORED private final Map<Integer, Collection<String>> indexToName =
+          new LinkedHashMap<Integer, Collection<String>>();
+      IGNORED private final Map<Integer, Class<? extends Expander>> indexToExpanderClass =
+          new LinkedHashMap<Integer, Class<? extends Expander>>();
+      IGNORED private final Map<Integer, Boolean> indexToEncoded = new LinkedHashMap<Integer, Boolean>();
+      IGNORED private transient Map<Integer, Expander> indexToExpander;
+      COMPLICATED private BitSet parameterToIgnore = new BitSet();
+      DONE private Boolean ignored;
+      DONE private transient Class<?> targetType;
+      DONE private transient Method method;
+      private transient final List<String> warnings = new ArrayList<>();
+     */
+
+    // Note: indexToExpander, indexToEncoded, indexToExpanderClass, indexToName, formParams is ignored here as it will never be populated, deprecated? obsolete?
+
+    // Note: the following fields of both override and inherited are always the same
+    result.returnType = override.returnType;
+    result.targetType = override.targetType;
+    result.configKey = override.configKey;
+
+    // TODO parameterToIgnore
+//    result.parameterToIgnore.or(override.parameterToIgnore);
+//    result.parameterToIgnore.and(inherited.parameterToIgnore);
+
+    result.queryMapEncoded = Optional.ofNullable(override.queryMapEncoded).orElse(inherited.queryMapEncoded);
+    result.ignored = Optional.ofNullable(override.ignored).orElse(inherited.ignored);
+    result.method = Optional.ofNullable(override.method).orElse(inherited.method);
+
+    result.urlIndex = Optional.ofNullable(override.urlIndex).orElse(inherited.urlIndex);
+
+    // Note: this presumes that bodyType and bodyIndex always correlate to each other
+    result.bodyIndex = Optional.ofNullable(override.bodyIndex).orElse(inherited.bodyIndex);
+    result.bodyType = Optional.ofNullable(override.bodyType).orElse(inherited.bodyType);
+
+    result.headerMapIndex = Optional.ofNullable(override.headerMapIndex).orElse(inherited.headerMapIndex);
+    result.queryMapIndex = Optional.ofNullable(override.queryMapIndex).orElse(inherited.queryMapIndex);
+
+    // Note: this must come last after the method meta data was merged
+    result.template = RequestTemplate.merge(result, inherited.template, override.template);
+
+    result.warnings.addAll(override.warnings);
+    result.warnings.addAll(inherited.warnings);
+
+    return result;
+  }
 }
